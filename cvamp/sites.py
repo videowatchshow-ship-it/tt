@@ -104,7 +104,11 @@ class Youtube(Instance):
             self.page.keyboard.press("Space")
 
         try:
-            self.page.click("button.ytp-ad-skip-button-modern", timeout=100)
+            for sel in ["button.ytp-ad-skip-button-modern", ".ytp-ad-skip-button", ".ytp-skip-ad-button"]:
+                btn = self.page.query_selector(sel)
+                if btn:
+                    btn.click()
+                    break
         except:
             pass
 
@@ -161,7 +165,7 @@ class Youtube(Instance):
 
         self.goto_with_retry(self.target_url)
 
-        self.page.wait_for_selector(".ytd-player", timeout=30000)
+        self.page.wait_for_selector("#movie_player", timeout=30000)
         self.page.wait_for_timeout(5000)
         if self.page.evaluate("""document.querySelector("div#movie_player").classList.contains('paused-mode')"""):
             self.page.keyboard.press("Space")
