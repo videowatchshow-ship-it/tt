@@ -1,0 +1,1 @@
+# CVAmp Desktop Launcher
