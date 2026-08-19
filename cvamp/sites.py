@@ -161,7 +161,7 @@ class Youtube(Instance):
 
         self.goto_with_retry(self.target_url)
 
-        self.page.wait_for_selector(".ytd-player", timeout=30000)
+        self.page.wait_for_selector("ytd-player", timeout=30000)
         self.page.wait_for_timeout(5000)
         if self.page.evaluate("""document.querySelector("div#movie_player").classList.contains('paused-mode')"""):
             self.page.keyboard.press("Space")
