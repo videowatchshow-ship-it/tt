@@ -136,7 +136,7 @@ class Instance(ABC):
         ]
 
         if self.headless:
-            CHROMIUM_ARGS.append("--headless")
+            CHROMIUM_ARGS.append("--headless=new")
 
         proxy_dict = self.proxy_dict
 
