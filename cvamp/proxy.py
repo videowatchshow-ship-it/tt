@@ -8,10 +8,7 @@ logger = logging.getLogger(__name__)
 class ProxyGetter:
     def __init__(self, proxy_file_name="proxy_list.txt"):
         self.proxy_list = []
-        if os.path.isabs(proxy_file_name):
-            self.pathed_file_name = proxy_file_name
-        else:
-            self.pathed_file_name = os.path.join(os.getcwd(), "proxy", proxy_file_name)
+        self.pathed_file_name = os.path.join(os.getcwd(), "proxy", proxy_file_name)
         self.build_proxy_list()
 
     def build_proxy_list(self):
