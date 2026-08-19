@@ -1,9 +1,9 @@
 @echo off
 chcp 65001 >nul 2>&1
 cd /d "%~dp0"
-title CVAmp Viewer Bot Launcher
+title CVAmp Viewer Bot
 echo ============================================
-echo   CVAmp - Original GUI YouTube Bot
+echo   CVAmp - Crude Viewer Amplifier
 echo ============================================
 echo.
 
@@ -12,7 +12,6 @@ python --version >nul 2>&1
 if errorlevel 1 (
     echo [ERROR] Python not found. Install Python 3.11.x
     echo https://www.python.org/downloads/
-    echo "Add Python to PATH" check required.
     pause
     exit /b 1
 )
@@ -36,31 +35,17 @@ if errorlevel 1 (
     )
 )
 
-REM Check Chrome
-where chrome >nul 2>&1
-if errorlevel 1 (
-    if not exist "C:\Program Files\Google\Chrome\Application\chrome.exe" (
-        if not exist "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe" (
-            echo [WARNING] Chrome not detected. CVAmp requires Google Chrome.
-            echo https://www.google.com/chrome/
-            echo.
-        )
-    )
-)
-
-REM Check proxy file
 if not exist "proxy\proxy_list.txt" (
-    echo [ERROR] proxy\proxy_list.txt not found!
-    echo Create the file and add proxies: ip:port:username:password
-    pause
-    exit /b 1
+    echo [INFO] No proxy file found. Running without proxies.
+    if not exist "proxy" mkdir proxy
+    type nul > proxy\proxy_list.txt
 )
 
-echo CVAmp starting. Please wait for GUI...
+echo [INFO] Starting CVAmp GUI...
 echo.
 python main_gui.py
 if errorlevel 1 (
     echo.
-    echo [ERROR] CVAmp crashed. Check cvamp.log for details.
+    echo [ERROR] CVAmp crashed. Check cvamp.log
     pause
 )

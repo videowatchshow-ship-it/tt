@@ -16,13 +16,17 @@ class ProxyGetter:
 
     def build_proxy_list(self):
         try:
+            if not os.path.exists(self.pathed_file_name):
+                print(f"Proxy file not found: {self.pathed_file_name}")
+                print("Running without proxies (direct connection).")
+                return
             if self.pathed_file_name.endswith(".txt"):
                 self.build_proxy_list_txt()
             else:
                 print("File type not supported")
         except Exception as e:
             logger.exception(e)
-            raise FileNotFoundError(f"Unable to find {self.pathed_file_name}")
+            print(f"Warning: Could not load proxies from {self.pathed_file_name}. Running without proxies.")
 
     def build_proxy_list_txt(self):
         with open(self.pathed_file_name, "r") as fp:
