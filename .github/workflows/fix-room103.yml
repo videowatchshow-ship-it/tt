@@ -1,0 +1,29 @@
+name: 긴급 — photo data 권한수정 + 103번 선택
+on:
+  workflow_dispatch:
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 권한 수정 + 103번 설정
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 34.104.233.35
+          username: ${{ secrets.GCP_USER }}
+          key: ${{ secrets.GCP_SSH_KEY }}
+          port: 22
+          timeout: 60s
+          command_timeout: 3m
+          script: |
+            D=/var/www/sites/chamgyo/public/photo/data
+            sudo chown -R www-data:www-data "$D"
+            sudo chmod -R u+rwX,g+rwX "$D"
+            sudo find "$D" -type d -exec chmod g+s {} \;
+            echo '{"room_id":103}' | sudo tee "$D/selected_room.json" >/dev/null
+            for CH in cent otuki denny tak jay gain abc01 abc02 abc03 abc04 abc05 abc06 abc07; do
+              echo '{"room_id":103}' | sudo tee "$D/sel_$CH.json" >/dev/null
+            done
+            sudo chown -R www-data:www-data "$D"
+            echo "완료:"
+            ls -la "$D/selected_room.json" "$D/sel_cent.json"
+            cat "$D/sel_cent.json"
