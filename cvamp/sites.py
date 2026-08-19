@@ -129,14 +129,21 @@ class Youtube(Instance):
             return
 
         # Fetch the current resume time for the stream
-        current_resume_time = int(
-            self.page.evaluate(
-                '''() => {
-            const element = document.querySelector(".ytp-progress-bar");
-            return element.getAttribute("aria-valuenow");
-        }'''
+        try:
+            current_resume_time = int(
+                self.page.evaluate(
+                    '''() => {
+                const el = document.querySelector(".ytp-progress-bar");
+                if (!el) {
+                    const vid = document.querySelector("video");
+                    return vid ? Math.floor(vid.currentTime) : 0;
+                }
+                return el.getAttribute("aria-valuenow") || 0;
+            }'''
+                )
             )
-        )
+        except:
+            current_resume_time = 0
 
         if current_resume_time:
             # If the current resume time has advanced past the last active resume time, update and set status to
@@ -149,15 +156,28 @@ class Youtube(Instance):
         # If none of the above conditions are met, the stream is buffering
         self.status = utils.InstanceStatus.BUFFERING
 
+    def _dismiss_consent(self):
+        for sel in [
+            self.cookie_css,
+            "button[aria-label*='Accept']",
+            "button[aria-label*='accept']",
+            "tp-yt-paper-button.style-scope.ytd-consent-bump-v2-lightbox",
+            "ytd-consent-bump-v2-lightbox button",
+        ]:
+            try:
+                btn = self.page.query_selector(sel)
+                if btn and btn.is_visible():
+                    btn.click()
+                    self.page.wait_for_timeout(1000)
+                    return
+            except:
+                pass
+
     def todo_after_spawn(self):
         self.goto_with_retry("https://www.youtube.com/")
+        self.page.wait_for_timeout(2000)
 
-        self.page.wait_for_timeout(1000)
-
-        try:
-            self.page.click(self.cookie_css, timeout=10000)
-        except:
-            logger.warning("Cookie consent banner not found/clicked.")
+        self._dismiss_consent()
 
         for key, value in self.local_storage.items():
             tosend = """window.localStorage.setItem('{key}','{value}');""".format(key=key, value=value)
@@ -165,9 +185,22 @@ class Youtube(Instance):
 
         self.goto_with_retry(self.target_url)
 
-        self.page.wait_for_selector("#movie_player", timeout=30000)
+        try:
+            self.page.wait_for_selector("#movie_player, video, ytd-player", timeout=45000)
+        except:
+            logger.warning(f"Player selector timeout. Page title: {self.page.title()}, URL: {self.page.url}")
+            self._dismiss_consent()
+            self.page.wait_for_selector("#movie_player, video, ytd-player", timeout=30000)
+
         self.page.wait_for_timeout(5000)
-        if self.page.evaluate("""document.querySelector("div#movie_player").classList.contains('paused-mode')"""):
+        try:
+            paused = self.page.evaluate("""(() => {
+                const p = document.querySelector("#movie_player");
+                return p ? p.classList.contains('paused-mode') : false;
+            })()""")
+            if paused:
+                self.page.keyboard.press("Space")
+        except:
             self.page.keyboard.press("Space")
         self.page.keyboard.press("f")
         self.status = utils.InstanceStatus.INITIALIZED
