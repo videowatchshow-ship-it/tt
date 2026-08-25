@@ -133,6 +133,8 @@ class Instance(ABC):
             "--mute-audio",
             "--webrtc-ip-handling-policy=disable_non_proxied_udp",
             "--force-webrtc-ip-handling-policy",
+            "--disable-features=IsolateOrigins,site-per-process",
+            "--disable-site-isolation-trials",
         ]
 
         if self.headless:
@@ -164,7 +166,7 @@ class Instance(ABC):
         self.page = self.context.new_page()
         self.page.add_init_script("""navigator.webdriver = false;""")
 
-    def goto_with_retry(self, url, max_tries=3, timeout=20000):
+    def goto_with_retry(self, url, max_tries=3, timeout=30000):
         """
         Tries to navigate to a page max_tries times. Raises the last exception if all attempts fail.
         """
