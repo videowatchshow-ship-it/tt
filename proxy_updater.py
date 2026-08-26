@@ -18,6 +18,17 @@ TEST_URL = "https://www.youtube.com/generate_204"
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 ipport_re = re.compile(r"\b(\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})\b")
+_BAD_PREFIXES = ("0.", "10.", "127.", "169.254.", "172.16.", "172.17.", "172.18.",
+                  "172.19.", "172.20.", "172.21.", "172.22.", "172.23.", "172.24.",
+                  "172.25.", "172.26.", "172.27.", "172.28.", "172.29.", "172.30.",
+                  "172.31.", "192.168.", "255.")
+
+def _is_valid_proxy(ip_port):
+    ip = ip_port.split(":")[0]
+    if ip.startswith(_BAD_PREFIXES):
+        return False
+    parts = ip.split(".")
+    return all(0 <= int(p) <= 255 for p in parts)
 _ctx = ssl.create_default_context(); _ctx.check_hostname = False; _ctx.verify_mode = ssl.CERT_NONE
 
 SOURCES = [
@@ -109,6 +120,7 @@ def collect_raw():
             print(f"  [src] +{cnt:>6}  {url.split('/')[2]}")
         except Exception as e:
             print(f"  [src] FAIL {url.split('/')[2]}: {e}")
+    pool = {p for p in pool if _is_valid_proxy(p)}
     return list(pool)
 
 

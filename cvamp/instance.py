@@ -86,7 +86,7 @@ class Instance(ABC):
             self.todo_after_spawn()
             self.loop_and_check()
         except Exception as e:
-            message = e.args[0][:25] if e.args else ""
+            message = str(e.args[0])[:25] if e.args else ""
             logger.exception(f"{e} died at page {self.page.url if self.page else None}")
             print(f"{self.site_name} Instance {self.id} died: {type(e).__name__}:{message}... Please see cvamp.log.")
         else:
