@@ -224,6 +224,10 @@ def main():
         sys.exit(1)
 
     target_url = sys.argv[1]
+    # 채널 URL이면 /live 붙이기
+    if "/@" in target_url and "/live" not in target_url:
+        target_url = target_url.rstrip("/") + "/live"
+        log.info(f"채널 URL 감지 → 라이브 URL로 변환: {target_url}")
     target_count = int(sys.argv[2]) if len(sys.argv) > 2 else 100
 
     log.info(f"=== CVAmp 헤드리스 봇 시작 ===")
