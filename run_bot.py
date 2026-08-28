@@ -237,8 +237,8 @@ def main():
     # 동시 50개씩 웨이브, 각 웨이브 사이 3초 대기
     # 50개 × 40웨이브 = 2000개 시도, 40 × 3초 = 120초 + 스폰시간 ~5분 = 총 ~7분
 
-    WAVE_SIZE = 50  # 동시 스폰 수 (RAM 16GB 기준)
-    WAVE_PAUSE = 3  # 웨이브 사이 대기 (초)
+    WAVE_SIZE = 100  # 동시 스폰 수 (RAM 64GB, i9-11900K)
+    WAVE_PAUSE = 2  # 웨이브 사이 대기 (초)
 
     log.info(f"웨이브 모드: {WAVE_SIZE}개씩 동시 스폰, {WAVE_PAUSE}초 간격")
 
