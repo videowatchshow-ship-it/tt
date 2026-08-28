@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-# CVAmp turbo runner — skip pre-validation, spawn directly, replace failures instantly.
-# Target: 100 alive viewers within 7 minutes.
+# CVAmp turbo runner — sequential spawning to prevent OOM.
+# Target: 200 watching viewers.
 # Usage: python run_bot.py https://www.youtube.com/watch?v=VIDEO_ID [count]
-import sys, os, time, threading, random, logging, queue
+import sys, os, time, threading, random, logging, queue, ctypes
 
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "")
 
@@ -46,9 +46,40 @@ CHROMIUM_ARGS = [
 lock = threading.Lock()
 stats = {"alive": 0, "watching": 0, "failed": 0, "total_spawned": 0}
 
-# proxy feeder
 proxy_queue = queue.Queue()
 stop_event = threading.Event()
+
+# 동시 스폰 중인 인스턴스 수 제한 (OOM 방지)
+spawn_semaphore = threading.Semaphore(5)
+
+
+def get_free_memory_gb():
+    try:
+        if sys.platform == "win32":
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+            stat = MEMORYSTATUSEX()
+            stat.dwLength = ctypes.sizeof(stat)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat))
+            return stat.ullAvailPhys / (1024 ** 3)
+        else:
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    if line.startswith("MemAvailable:"):
+                        return int(line.split()[1]) / (1024 ** 2)
+    except Exception:
+        pass
+    return 99.0
 
 
 def load_proxies():
@@ -59,7 +90,6 @@ def load_proxies():
 
 
 def proxy_feeder():
-    """끊임없이 프록시를 proxy_queue에 공급"""
     while not stop_event.is_set():
         proxies = load_proxies()
         if not proxies:
@@ -74,15 +104,18 @@ def proxy_feeder():
 
 
 def run_viewer(proxy_str, target_url, instance_id):
-    """스폰 즉시 시도. 실패하면 바로 리턴 (교체 대상)"""
     success = False
     try:
+        spawn_semaphore.acquire()
         with sync_playwright() as p:
             browser = p.chromium.launch(
                 headless=True,
                 args=CHROMIUM_ARGS + ["--window-position=0,0"],
                 proxy={"server": f"http://{proxy_str}"},
             )
+            spawn_semaphore.release()
+            released = True
+
             major = browser.version.split(".")[0]
             ctx = browser.new_context(
                 viewport={"width": 640, "height": 360},
@@ -91,7 +124,6 @@ def run_viewer(proxy_str, target_url, instance_id):
             page = ctx.new_page()
             page.add_init_script("navigator.webdriver = false;")
 
-            # youtube 홈 → localStorage 설정 → 타겟 이동
             page.goto("https://www.youtube.com/", timeout=15000, wait_until="domcontentloaded")
             page.wait_for_timeout(1000)
             dismiss_consent(page)
@@ -158,13 +190,15 @@ def run_viewer(proxy_str, target_url, instance_id):
                 if watching and not was_watching:
                     with lock:
                         stats["watching"] += 1
-                    log.info(f"[#{instance_id}] ▶ 시청 중 | alive={stats['alive']} watching={stats['watching']}")
+                    log.info(f"[#{instance_id}] ▶ watching | alive={stats['alive']} watching={stats['watching']}")
                 elif not watching and was_watching:
                     with lock:
                         stats["watching"] = max(0, stats["watching"] - 1)
 
     except Exception as e:
         log.debug(f"[#{instance_id}] fail: {str(e)[:60]}")
+        if not locals().get("released"):
+            spawn_semaphore.release()
     finally:
         if success:
             with lock:
@@ -189,25 +223,9 @@ def dismiss_consent(page):
             pass
 
 
-def spawner_wave(target_url, target_count, wave_size):
-    """wave_size개를 동시에 스폰 시도. 성공한 것만 살아남음."""
-    threads = []
-    for i in range(wave_size):
-        try:
-            proxy = proxy_queue.get(timeout=2)
-        except queue.Empty:
-            break
-        iid = stats["total_spawned"] + stats["failed"] + i + 1
-        t = threading.Thread(target=run_viewer, args=(proxy, target_url, iid), daemon=True)
-        t.start()
-        threads.append(t)
-    return threads
-
-
 def main():
     if len(sys.argv) < 2:
         print("사용법: python run_bot.py <YouTube_URL> [목표_수]")
-        print("예: python run_bot.py https://www.youtube.com/watch?v=QfDaqmb_1Zg 100")
         sys.exit(1)
 
     target_url = sys.argv[1]
@@ -216,9 +234,9 @@ def main():
         log.info(f"채널 URL → 라이브: {target_url}")
     target_watching = int(sys.argv[2]) if len(sys.argv) > 2 else 200
 
-    log.info(f"=== CVAmp TURBO 모드 ===")
+    log.info(f"=== CVAmp 순차 스폰 모드 ===")
     log.info(f"URL: {target_url}")
-    log.info(f"목표: 시청자 {target_watching}명 (7분 내)")
+    log.info(f"목표: 시청자 {target_watching}명")
 
     proxies = load_proxies()
     if not proxies:
@@ -226,25 +244,20 @@ def main():
         sys.exit(1)
     log.info(f"프록시 {len(proxies)}개 준비됨")
 
-    # 프록시 공급 스레드
     ft = threading.Thread(target=proxy_feeder, daemon=True)
     ft.start()
 
     t0 = time.time()
 
-    # 전략: 웨이브 방식으로 대량 동시 스폰
-    # 무료 프록시 성공률 ~5% → 100개 성공하려면 ~2000개 시도
-    # 동시 50개씩 웨이브, 각 웨이브 사이 3초 대기
-    # 50개 × 40웨이브 = 2000개 시도, 40 × 3초 = 120초 + 스폰시간 ~5분 = 총 ~7분
+    # 동시 스폰 최대 5개 (세마포어), 1초 간격으로 새 스레드 생성
+    # MAX_ALIVE 제한으로 메모리 보호
+    MAX_ALIVE = min(target_watching * 2, 400)
+    SPAWN_DELAY = 1.0  # 새 인스턴스 간 1초 대기
+    iid = 0
 
-    WAVE_SIZE = 30  # 동시 스폰 수 (안전하게)
-    WAVE_PAUSE = 10  # 웨이브 사이 대기 — 이전 웨이브 실패분 정리 시간
-    MAX_ALIVE = target_watching * 3
-
-    log.info(f"웨이브 모드: {WAVE_SIZE}개씩 동시 스폰, alive 상한 {MAX_ALIVE}")
+    log.info(f"순차 모드: 1초 간격 스폰, 동시 초기화 최대 5개, alive 상한 {MAX_ALIVE}")
 
     try:
-        wave = 0
         while True:
             elapsed = round(time.time() - t0)
 
@@ -254,17 +267,29 @@ def main():
                 continue
 
             if stats["alive"] >= MAX_ALIVE:
-                log.info(f"[{elapsed}s] alive 상한 도달 ({stats['alive']}), watching={stats['watching']}/{target_watching} 대기 중...")
+                log.info(f"[{elapsed}s] alive 상한 ({stats['alive']}), watching={stats['watching']}/{target_watching} 대기...")
                 time.sleep(5)
                 continue
 
-            wave += 1
-            alive_room = MAX_ALIVE - stats["alive"]
-            spawn_count = min(WAVE_SIZE, alive_room)
-            log.info(f"[{elapsed}s] 웨이브 #{wave}: {spawn_count}개 스폰 | alive={stats['alive']} watching={stats['watching']}/{target_watching} failed={stats['failed']}")
+            free_mem = get_free_memory_gb()
+            if free_mem < 2.0:
+                log.warning(f"[{elapsed}s] 메모리 부족 ({free_mem:.1f}GB), 스폰 일시정지...")
+                time.sleep(10)
+                continue
 
-            spawner_wave(target_url, target_watching, spawn_count)
-            time.sleep(WAVE_PAUSE)
+            try:
+                proxy = proxy_queue.get(timeout=2)
+            except queue.Empty:
+                continue
+
+            iid += 1
+            t = threading.Thread(target=run_viewer, args=(proxy, target_url, iid), daemon=True)
+            t.start()
+
+            if iid % 20 == 0:
+                log.info(f"[{elapsed}s] 스폰 #{iid} | alive={stats['alive']} watching={stats['watching']}/{target_watching} failed={stats['failed']} mem={free_mem:.1f}GB")
+
+            time.sleep(SPAWN_DELAY)
 
             if elapsed > 420 and stats["watching"] < target_watching:
                 log.warning(f"[{elapsed}s] 7분 초과! watching={stats['watching']}/{target_watching}")
