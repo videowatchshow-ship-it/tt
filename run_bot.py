@@ -214,11 +214,11 @@ def main():
     if "/@" in target_url and "/live" not in target_url:
         target_url = target_url.rstrip("/") + "/live"
         log.info(f"채널 URL → 라이브: {target_url}")
-    target_count = int(sys.argv[2]) if len(sys.argv) > 2 else 100
+    target_watching = int(sys.argv[2]) if len(sys.argv) > 2 else 200
 
     log.info(f"=== CVAmp TURBO 모드 ===")
     log.info(f"URL: {target_url}")
-    log.info(f"목표: {target_count}명 (7분 내)")
+    log.info(f"목표: 시청자 {target_watching}명 (7분 내)")
 
     proxies = load_proxies()
     if not proxies:
@@ -237,33 +237,37 @@ def main():
     # 동시 50개씩 웨이브, 각 웨이브 사이 3초 대기
     # 50개 × 40웨이브 = 2000개 시도, 40 × 3초 = 120초 + 스폰시간 ~5분 = 총 ~7분
 
-    WAVE_SIZE = 100  # 동시 스폰 수 (RAM 64GB, i9-11900K)
+    WAVE_SIZE = 150  # 동시 스폰 수 (RAM 64GB, i9-11900K)
     WAVE_PAUSE = 2  # 웨이브 사이 대기 (초)
+    MAX_ALIVE = target_watching * 3  # watching 유지율 ~30-50%, 여유있게 3배
 
-    log.info(f"웨이브 모드: {WAVE_SIZE}개씩 동시 스폰, {WAVE_PAUSE}초 간격")
+    log.info(f"웨이브 모드: {WAVE_SIZE}개씩 동시 스폰, alive 상한 {MAX_ALIVE}")
 
     try:
         wave = 0
         while True:
-            need = target_count - stats["alive"]
             elapsed = round(time.time() - t0)
 
-            if need <= 0:
-                log.info(f"[{elapsed}s] ★ 목표 달성! alive={stats['alive']} watching={stats['watching']} failed={stats['failed']}")
+            if stats["watching"] >= target_watching:
+                log.info(f"[{elapsed}s] ★ 목표 달성! watching={stats['watching']}/{target_watching} alive={stats['alive']} failed={stats['failed']}")
                 time.sleep(10)
                 continue
 
-            wave += 1
-            # 필요한 양의 3배 스폰 (성공률 감안, 최대 WAVE_SIZE)
-            spawn_count = min(WAVE_SIZE, need * 3)
-            log.info(f"[{elapsed}s] 웨이브 #{wave}: {spawn_count}개 스폰 | alive={stats['alive']} need={need} failed={stats['failed']}")
+            if stats["alive"] >= MAX_ALIVE:
+                log.info(f"[{elapsed}s] alive 상한 도달 ({stats['alive']}), watching={stats['watching']}/{target_watching} 대기 중...")
+                time.sleep(5)
+                continue
 
-            spawner_wave(target_url, target_count, spawn_count)
+            wave += 1
+            alive_room = MAX_ALIVE - stats["alive"]
+            spawn_count = min(WAVE_SIZE, alive_room)
+            log.info(f"[{elapsed}s] 웨이브 #{wave}: {spawn_count}개 스폰 | alive={stats['alive']} watching={stats['watching']}/{target_watching} failed={stats['failed']}")
+
+            spawner_wave(target_url, target_watching, spawn_count)
             time.sleep(WAVE_PAUSE)
 
-            # 7분 넘으면 경고
-            if elapsed > 420 and stats["alive"] < target_count:
-                log.warning(f"[{elapsed}s] 7분 초과! alive={stats['alive']}/{target_count}")
+            if elapsed > 420 and stats["watching"] < target_watching:
+                log.warning(f"[{elapsed}s] 7분 초과! watching={stats['watching']}/{target_watching}")
 
     except KeyboardInterrupt:
         log.info("사용자 중단 (Ctrl+C)")
