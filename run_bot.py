@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
-# CVAmp headless batch runner — validates proxies with real YouTube page loads,
-# then spawns viewer instances only with proxies that actually work.
+# CVAmp headless batch runner — validates proxies, spawns viewers, auto-replaces dead ones.
 # Usage: python run_bot.py https://www.youtube.com/watch?v=VIDEO_ID [count]
 import sys, os, time, threading, random, logging
 
@@ -35,6 +34,7 @@ CHROMIUM_ARGS = [
 
 lock = threading.Lock()
 stats = {"alive": 0, "watching": 0, "failed": 0, "total_spawned": 0}
+dead_slots = []  # instance IDs that died and need replacement
 
 
 def load_proxies():
@@ -49,7 +49,6 @@ def load_proxies():
 
 
 def validate_proxy_real(proxy_str, test_url, timeout=20):
-    """Validate proxy by actually loading a YouTube page with Playwright headless."""
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(
@@ -76,11 +75,10 @@ def validate_proxy_real(proxy_str, test_url, timeout=20):
 
 
 def validate_batch(proxies, test_url, max_workers=20):
-    """Validate proxies in parallel using real YouTube page loads."""
     valid = []
     total = len(proxies)
     done = 0
-    log.info(f"프록시 {total}개 실제 YouTube 검증 시작 (동시 {max_workers}개)...")
+    log.info(f"프록시 {total}개 YouTube 검증 중 (동시 {max_workers}개)...")
 
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
         futures = {ex.submit(validate_proxy_real, p, test_url): p for p in proxies}
@@ -89,7 +87,7 @@ def validate_batch(proxies, test_url, max_workers=20):
             result = fut.result()
             if result:
                 valid.append(result)
-                log.info(f"  ✓ 검증 통과: {result} ({len(valid)}개 확보, {done}/{total})")
+                log.info(f"  ✓ 검증 통과: {result} ({len(valid)}개, {done}/{total})")
             elif done % 50 == 0:
                 log.info(f"  검증 진행: {done}/{total}, 통과 {len(valid)}개")
 
@@ -98,12 +96,11 @@ def validate_batch(proxies, test_url, max_workers=20):
 
 
 def run_viewer(proxy_str, target_url, instance_id):
-    """Run a single YouTube viewer instance."""
     try:
         with sync_playwright() as p:
             launch_opts = {
                 "headless": True,
-                "args": CHROMIUM_ARGS + [f"--window-position=0,0"],
+                "args": CHROMIUM_ARGS + ["--window-position=0,0"],
             }
             if proxy_str:
                 launch_opts["proxy"] = {"server": f"http://{proxy_str}"}
@@ -117,7 +114,6 @@ def run_viewer(proxy_str, target_url, instance_id):
             page = ctx.new_page()
             page.add_init_script("navigator.webdriver = false;")
 
-            # set low quality
             page.goto("https://www.youtube.com/", timeout=30000, wait_until="domcontentloaded")
             page.wait_for_timeout(2000)
             dismiss_consent(page)
@@ -138,7 +134,6 @@ def run_viewer(proxy_str, target_url, instance_id):
 
             page.wait_for_timeout(3000)
 
-            # unpause if needed
             try:
                 if page.evaluate('(() => { const p = document.querySelector("div#movie_player"); return p && p.classList.contains("paused-mode"); })()'):
                     page.keyboard.press("Space")
@@ -156,19 +151,16 @@ def run_viewer(proxy_str, target_url, instance_id):
             while True:
                 page.wait_for_timeout(10000)
 
-                # skip ads
                 try:
                     page.click("button.ytp-ad-skip-button-modern", timeout=100)
                 except Exception:
                     pass
 
-                # unpause
                 if page.query_selector('div.html5-video-player:not(.playing-mode)'):
                     page.keyboard.press("Space")
 
                 dismiss_consent(page)
 
-                # check watching status
                 try:
                     cur = int(page.evaluate('''() => {
                         const el = document.querySelector(".ytp-progress-bar");
@@ -199,6 +191,7 @@ def run_viewer(proxy_str, target_url, instance_id):
         with lock:
             stats["alive"] = max(0, stats["alive"] - 1)
             stats["failed"] += 1
+            dead_slots.append(instance_id)
 
 
 def dismiss_consent(page):
@@ -224,7 +217,6 @@ def main():
         sys.exit(1)
 
     target_url = sys.argv[1]
-    # 채널 URL이면 /live 붙이기
     if "/@" in target_url and "/live" not in target_url:
         target_url = target_url.rstrip("/") + "/live"
         log.info(f"채널 URL 감지 → 라이브 URL로 변환: {target_url}")
@@ -234,7 +226,6 @@ def main():
     log.info(f"URL: {target_url}")
     log.info(f"목표: {target_count}명")
 
-    # 1) 프록시 로드
     all_proxies = load_proxies()
     if not all_proxies:
         log.error("프록시가 없습니다. 먼저 proxy_updater.py를 실행하세요.")
@@ -242,52 +233,92 @@ def main():
 
     random.shuffle(all_proxies)
 
-    # 2) 실제 YouTube 페이지로 프록시 검증 (배치 단위)
+    # 사용한 프록시 추적
+    used_proxies = set()
+    proxy_idx = [0]  # mutable for closure
+
+    def get_fresh_proxies(count):
+        """사용 안 한 프록시 가져오기, 다 쓰면 파일 다시 로드"""
+        batch = []
+        while len(batch) < count:
+            if proxy_idx[0] >= len(all_proxies):
+                log.info("프록시 전부 사용됨, 파일 다시 로드...")
+                fresh = load_proxies()
+                if not fresh:
+                    break
+                random.shuffle(fresh)
+                all_proxies.clear()
+                all_proxies.extend(fresh)
+                used_proxies.clear()
+                proxy_idx[0] = 0
+
+            p = all_proxies[proxy_idx[0]]
+            proxy_idx[0] += 1
+            if p not in used_proxies:
+                batch.append(p)
+        return batch
+
+    # 1단계: 초기 검증
     validated = []
-    batch_size = 200
-    validate_workers = 20
-    idx = 0
-
     log.info(f"--- 1단계: 프록시 검증 (목표 {target_count}개) ---")
-    while len(validated) < target_count and idx < len(all_proxies):
-        batch = all_proxies[idx:idx + batch_size]
-        idx += batch_size
-        new_valid = validate_batch(batch, target_url, max_workers=validate_workers)
+    while len(validated) < target_count:
+        batch = get_fresh_proxies(200)
+        if not batch:
+            break
+        new_valid = validate_batch(batch, target_url, max_workers=20)
+        for p in new_valid:
+            used_proxies.add(p)
         validated.extend(new_valid)
-        log.info(f"검증 누적: {len(validated)}/{target_count} (검사한 프록시: {idx}/{len(all_proxies)})")
-
+        log.info(f"검증 누적: {len(validated)}/{target_count}")
         if len(validated) >= target_count:
             break
 
     if not validated:
         log.error("검증 통과한 프록시가 하나도 없습니다.")
-        log.error("proxy_updater.py를 더 오래 돌려서 프록시를 모은 후 재시도하세요.")
         sys.exit(1)
 
     validated = validated[:target_count]
     log.info(f"--- 2단계: {len(validated)}개 시청 인스턴스 생성 ---")
 
-    # 3) 시청 인스턴스 생성
-    spawn_interval = 1.3
-    threads = []
-    for i, proxy in enumerate(validated):
-        t = threading.Thread(target=run_viewer, args=(proxy, target_url, i + 1), daemon=True)
+    # 2단계: 스폰
+    next_id = [0]
+    for proxy in validated:
+        next_id[0] += 1
+        t = threading.Thread(target=run_viewer, args=(proxy, target_url, next_id[0]), daemon=True)
         t.start()
-        threads.append(t)
-        if (i + 1) % 10 == 0:
-            log.info(f"생성 진행: {i + 1}/{len(validated)} | alive={stats['alive']} watching={stats['watching']}")
-        time.sleep(spawn_interval)
+        if next_id[0] % 10 == 0:
+            log.info(f"생성 진행: {next_id[0]}/{len(validated)} | alive={stats['alive']} watching={stats['watching']}")
+        time.sleep(1.3)
 
-    log.info(f"=== 모든 인스턴스 생성 완료: {len(validated)}개 ===")
+    log.info(f"=== 초기 스폰 완료: {len(validated)}개 ===")
 
-    # 4) 상태 모니터링
+    # 3단계: 모니터링 + 자동 교체
     try:
         while True:
             time.sleep(30)
             log.info(f"[상태] alive={stats['alive']} watching={stats['watching']} failed={stats['failed']} total={stats['total_spawned']}")
-            if stats["alive"] == 0 and stats["total_spawned"] > 0:
-                log.info("모든 인스턴스 종료됨. 프로그램 종료.")
-                break
+
+            # 죽은 슬롯 교체
+            with lock:
+                to_replace = len(dead_slots)
+                dead_slots.clear()
+
+            if to_replace > 0:
+                log.info(f"--- 자동 교체: {to_replace}개 죽은 인스턴스 교체 시작 ---")
+                batch = get_fresh_proxies(to_replace * 10)
+                if batch:
+                    new_valid = validate_batch(batch, target_url, max_workers=min(20, len(batch)))
+                    for proxy in new_valid[:to_replace]:
+                        used_proxies.add(proxy)
+                        next_id[0] += 1
+                        t = threading.Thread(target=run_viewer, args=(proxy, target_url, next_id[0]), daemon=True)
+                        t.start()
+                        time.sleep(1.3)
+                    replaced = min(len(new_valid), to_replace)
+                    log.info(f"교체 완료: {replaced}/{to_replace}개")
+                else:
+                    log.warning("교체할 프록시 없음")
+
     except KeyboardInterrupt:
         log.info("사용자 중단 (Ctrl+C)")
 
