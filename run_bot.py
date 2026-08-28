@@ -63,7 +63,7 @@ def validate_proxy_real(proxy_str, test_url, timeout=20):
             )
             page = ctx.new_page()
             page.add_init_script("navigator.webdriver = false;")
-            page.goto(test_url, timeout=timeout * 1000)
+            page.goto(test_url, timeout=timeout * 1000, wait_until="domcontentloaded")
             page.wait_for_timeout(3000)
 
             has_player = page.query_selector("ytd-player, #movie_player, video")
@@ -118,7 +118,7 @@ def run_viewer(proxy_str, target_url, instance_id):
             page.add_init_script("navigator.webdriver = false;")
 
             # set low quality
-            page.goto("https://www.youtube.com/", timeout=30000)
+            page.goto("https://www.youtube.com/", timeout=30000, wait_until="domcontentloaded")
             page.wait_for_timeout(2000)
             dismiss_consent(page)
 
@@ -127,7 +127,7 @@ def run_viewer(proxy_str, target_url, instance_id):
             quality_val = '{"data":"{\\"quality\\":144,\\"previousQuality\\":144}","expiration":' + far_future + ',"creation":' + now_ms + '}'
             page.evaluate(f"window.localStorage.setItem('yt-player-quality', '{quality_val}');")
 
-            page.goto(target_url, timeout=60000)
+            page.goto(target_url, timeout=60000, wait_until="domcontentloaded")
             page.wait_for_timeout(3000)
             dismiss_consent(page)
 
@@ -245,7 +245,7 @@ def main():
     # 2) 실제 YouTube 페이지로 프록시 검증 (배치 단위)
     validated = []
     batch_size = 200
-    validate_workers = 15  # Playwright 인스턴스라 너무 많으면 메모리 부족
+    validate_workers = 20
     idx = 0
 
     log.info(f"--- 1단계: 프록시 검증 (목표 {target_count}개) ---")
@@ -268,7 +268,7 @@ def main():
     log.info(f"--- 2단계: {len(validated)}개 시청 인스턴스 생성 ---")
 
     # 3) 시청 인스턴스 생성
-    spawn_interval = 2  # 초
+    spawn_interval = 1.3
     threads = []
     for i, proxy in enumerate(validated):
         t = threading.Thread(target=run_viewer, args=(proxy, target_url, i + 1), daemon=True)

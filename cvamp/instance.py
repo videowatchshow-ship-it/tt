@@ -166,13 +166,13 @@ class Instance(ABC):
         self.page = self.context.new_page()
         self.page.add_init_script("""navigator.webdriver = false;""")
 
-    def goto_with_retry(self, url, max_tries=3, timeout=30000):
+    def goto_with_retry(self, url, max_tries=6, timeout=30000):
         """
         Tries to navigate to a page max_tries times. Raises the last exception if all attempts fail.
         """
         for attempt in range(1, max_tries + 1):
             try:
-                self.page.goto(url, timeout=timeout)
+                self.page.goto(url, timeout=timeout, wait_until="domcontentloaded")
                 return
             except Exception:
                 logger.warning(f"Instance {self.id} failed connection attempt #{attempt}.")
