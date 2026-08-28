@@ -100,6 +100,8 @@ class Youtube(Instance):
         super().__init__(*args, **kwargs)
 
     def todo_every_loop(self):
+        self._dismiss_consent()
+
         if self.page.query_selector('div.html5-video-player:not(.playing-mode)'):
             self.page.keyboard.press("Space")
 
@@ -107,6 +109,23 @@ class Youtube(Instance):
             self.page.click("button.ytp-ad-skip-button-modern", timeout=100)
         except:
             pass
+
+    def _dismiss_consent(self):
+        for selector in [
+            self.cookie_css,
+            'button[aria-label="Accept all"]',
+            'button[aria-label="Accept the use of cookies and other data for the purposes described"]',
+            'form[action="https://consent.youtube.com/save"] button',
+        ]:
+            try:
+                btn = self.page.query_selector(selector)
+                if btn:
+                    btn.click()
+                    self.page.wait_for_timeout(2000)
+                    return True
+            except:
+                pass
+        return False
 
     def update_status(self):
         current_time = datetime.datetime.now()
@@ -118,42 +137,38 @@ class Youtube(Instance):
                 "last_stream_id": None,
             }
 
-        # If the stream was active less than 10 seconds ago, it's still being watched
         time_since_last_activity = current_time - self.status_info["last_active_timestamp"]
         if time_since_last_activity < datetime.timedelta(seconds=15):
             self.status = utils.InstanceStatus.WATCHING
             return
 
-        # Fetch the current resume time for the stream
-        current_resume_time = int(
-            self.page.evaluate(
-                '''() => {
-            const element = document.querySelector(".ytp-progress-bar");
-            return element.getAttribute("aria-valuenow");
-        }'''
+        try:
+            current_resume_time = int(
+                self.page.evaluate(
+                    '''() => {
+                const element = document.querySelector(".ytp-progress-bar");
+                return element ? element.getAttribute("aria-valuenow") : 0;
+            }'''
+                )
             )
-        )
+        except:
+            self.status = utils.InstanceStatus.BUFFERING
+            return
 
         if current_resume_time:
-            # If the current resume time has advanced past the last active resume time, update and set status to
             if current_resume_time > self.status_info["last_active_resume_time"]:
                 self.status_info["last_active_timestamp"] = current_time
                 self.status_info["last_active_resume_time"] = current_resume_time
                 self.status = utils.InstanceStatus.WATCHING
                 return
 
-        # If none of the above conditions are met, the stream is buffering
         self.status = utils.InstanceStatus.BUFFERING
 
     def todo_after_spawn(self):
         self.goto_with_retry("https://www.youtube.com/")
 
-        self.page.wait_for_timeout(1000)
-
-        try:
-            self.page.click(self.cookie_css, timeout=10000)
-        except:
-            logger.warning("Cookie consent banner not found/clicked.")
+        self.page.wait_for_timeout(2000)
+        self._dismiss_consent()
 
         for key, value in self.local_storage.items():
             tosend = """window.localStorage.setItem('{key}','{value}');""".format(key=key, value=value)
@@ -161,10 +176,21 @@ class Youtube(Instance):
 
         self.goto_with_retry(self.target_url)
 
-        self.page.wait_for_selector(".ytd-player", timeout=30000)
+        self.page.wait_for_timeout(3000)
+        self._dismiss_consent()
+
+        try:
+            self.page.wait_for_selector("ytd-player, #movie_player, video", timeout=30000)
+        except:
+            logger.warning(f"Instance {self.id}: player element not found, page may not have loaded")
+            raise
+
         self.page.wait_for_timeout(5000)
-        if self.page.evaluate("""document.querySelector("div#movie_player").classList.contains('paused-mode')"""):
-            self.page.keyboard.press("Space")
+        try:
+            if self.page.evaluate("""(() => { const p = document.querySelector("div#movie_player"); return p && p.classList.contains('paused-mode'); })()"""):
+                self.page.keyboard.press("Space")
+        except:
+            pass
         self.page.keyboard.press("f")
         self.status = utils.InstanceStatus.INITIALIZED
 

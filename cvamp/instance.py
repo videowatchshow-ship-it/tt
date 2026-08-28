@@ -86,7 +86,7 @@ class Instance(ABC):
             self.todo_after_spawn()
             self.loop_and_check()
         except Exception as e:
-            message = e.args[0][:25] if e.args else ""
+            message = str(e.args[0])[:25] if e.args else ""
             logger.exception(f"{e} died at page {self.page.url if self.page else None}")
             print(f"{self.site_name} Instance {self.id} died: {type(e).__name__}:{message}... Please see cvamp.log.")
         else:
@@ -133,10 +133,12 @@ class Instance(ABC):
             "--mute-audio",
             "--webrtc-ip-handling-policy=disable_non_proxied_udp",
             "--force-webrtc-ip-handling-policy",
+            "--disable-features=IsolateOrigins,site-per-process",
+            "--disable-site-isolation-trials",
         ]
 
         if self.headless:
-            CHROMIUM_ARGS.append("--headless")
+            CHROMIUM_ARGS.append("--headless=new")
 
         proxy_dict = self.proxy_dict
 
@@ -164,13 +166,13 @@ class Instance(ABC):
         self.page = self.context.new_page()
         self.page.add_init_script("""navigator.webdriver = false;""")
 
-    def goto_with_retry(self, url, max_tries=3, timeout=20000):
+    def goto_with_retry(self, url, max_tries=6, timeout=30000):
         """
         Tries to navigate to a page max_tries times. Raises the last exception if all attempts fail.
         """
         for attempt in range(1, max_tries + 1):
             try:
-                self.page.goto(url, timeout=timeout)
+                self.page.goto(url, timeout=timeout, wait_until="domcontentloaded")
                 return
             except Exception:
                 logger.warning(f"Instance {self.id} failed connection attempt #{attempt}.")

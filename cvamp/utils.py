@@ -1,4 +1,5 @@
 from enum import Enum, auto
+from cvamp import sites
 
 
 class InstanceCommands(Enum):
