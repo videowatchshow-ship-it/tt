@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
-# CVAmp headless pipeline runner — validates and spawns in parallel, auto-replaces dead instances.
+# CVAmp turbo runner — skip pre-validation, spawn directly, replace failures instantly.
+# Target: 100 alive viewers within 7 minutes.
 # Usage: python run_bot.py https://www.youtube.com/watch?v=VIDEO_ID [count]
 import sys, os, time, threading, random, logging, queue
 
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "")
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from playwright.sync_api import sync_playwright
 
 logging.basicConfig(
@@ -30,107 +30,70 @@ CHROMIUM_ARGS = [
     "--disable-site-isolation-trials",
     "--disable-gpu",
     "--disable-dev-shm-usage",
+    "--disable-extensions",
+    "--disable-component-extensions-with-background-pages",
+    "--disable-default-apps",
+    "--disable-breakpad",
+    "--disable-hang-monitor",
+    "--disable-prompt-on-repost",
+    "--disable-sync",
+    "--disable-translate",
+    "--metrics-recording-only",
+    "--no-default-browser-check",
+    "--js-flags=--max-old-space-size=128",
 ]
 
 lock = threading.Lock()
 stats = {"alive": 0, "watching": 0, "failed": 0, "total_spawned": 0}
-ready_queue = queue.Queue()  # validated proxies ready to spawn
+
+# proxy feeder
+proxy_queue = queue.Queue()
+stop_event = threading.Event()
 
 
 def load_proxies():
     if not os.path.exists(PROXY_FILE):
-        log.error(f"프록시 파일 없음: {PROXY_FILE}")
         return []
     with open(PROXY_FILE) as f:
-        proxies = [line.strip() for line in f if line.strip()]
-    log.info(f"프록시 {len(proxies)}개 로드됨")
-    return proxies
+        return [line.strip() for line in f if line.strip()]
 
 
-def validate_proxy_real(proxy_str, test_url, timeout=15):
+def proxy_feeder():
+    """끊임없이 프록시를 proxy_queue에 공급"""
+    while not stop_event.is_set():
+        proxies = load_proxies()
+        if not proxies:
+            time.sleep(5)
+            continue
+        random.shuffle(proxies)
+        for p in proxies:
+            if stop_event.is_set():
+                return
+            proxy_queue.put(p)
+        time.sleep(1)
+
+
+def run_viewer(proxy_str, target_url, instance_id):
+    """스폰 즉시 시도. 실패하면 바로 리턴 (교체 대상)"""
+    success = False
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(
                 headless=True,
-                args=CHROMIUM_ARGS,
+                args=CHROMIUM_ARGS + ["--window-position=0,0"],
                 proxy={"server": f"http://{proxy_str}"},
             )
-            ctx = browser.new_context(
-                viewport={"width": 800, "height": 600},
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            )
-            page = ctx.new_page()
-            page.add_init_script("navigator.webdriver = false;")
-            page.goto(test_url, timeout=timeout * 1000, wait_until="domcontentloaded")
-            page.wait_for_timeout(2000)
-            has_player = page.query_selector("ytd-player, #movie_player, video")
-            browser.close()
-            if has_player:
-                return proxy_str
-    except Exception:
-        pass
-    return None
-
-
-def validator_thread(target_url, target_count, stop_event):
-    """백그라운드 검증 스레드: 계속 프록시를 검증해서 ready_queue에 넣음"""
-    used = set()
-    while not stop_event.is_set():
-        proxies = load_proxies()
-        if not proxies:
-            log.warning("프록시 파일 비어있음, 10초 후 재시도")
-            time.sleep(10)
-            continue
-
-        random.shuffle(proxies)
-        fresh = [p for p in proxies if p not in used]
-        if not fresh:
-            log.info("모든 프록시 사용됨, used 초기화 후 재시도")
-            used.clear()
-            fresh = proxies[:]
-            random.shuffle(fresh)
-
-        for batch_start in range(0, len(fresh), 200):
-            if stop_event.is_set():
-                return
-            batch = fresh[batch_start:batch_start + 200]
-            log.info(f"[검증기] {len(batch)}개 검증 시작 (큐 대기: {ready_queue.qsize()}, alive: {stats['alive']})")
-
-            with ThreadPoolExecutor(max_workers=25) as ex:
-                futures = {ex.submit(validate_proxy_real, p, target_url): p for p in batch}
-                for fut in as_completed(futures):
-                    result = fut.result()
-                    if result and result not in used:
-                        used.add(result)
-                        ready_queue.put(result)
-                        log.info(f"  ✓ 검증 통과: {result} (큐: {ready_queue.qsize()})")
-
-            # alive가 목표 이상이면 검증 속도 줄임
-            if stats["alive"] >= target_count:
-                time.sleep(15)
-
-
-def run_viewer(proxy_str, target_url, instance_id):
-    try:
-        with sync_playwright() as p:
-            launch_opts = {
-                "headless": True,
-                "args": CHROMIUM_ARGS + ["--window-position=0,0"],
-            }
-            if proxy_str:
-                launch_opts["proxy"] = {"server": f"http://{proxy_str}"}
-
-            browser = p.chromium.launch(**launch_opts)
             major = browser.version.split(".")[0]
             ctx = browser.new_context(
-                viewport={"width": 800, "height": 600},
+                viewport={"width": 640, "height": 360},
                 user_agent=f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36",
             )
             page = ctx.new_page()
             page.add_init_script("navigator.webdriver = false;")
 
-            page.goto("https://www.youtube.com/", timeout=30000, wait_until="domcontentloaded")
-            page.wait_for_timeout(1500)
+            # youtube 홈 → localStorage 설정 → 타겟 이동
+            page.goto("https://www.youtube.com/", timeout=15000, wait_until="domcontentloaded")
+            page.wait_for_timeout(1000)
             dismiss_consent(page)
 
             now_ms = str(int(time.time() * 1000))
@@ -138,16 +101,17 @@ def run_viewer(proxy_str, target_url, instance_id):
             quality_val = '{"data":"{\\"quality\\":144,\\"previousQuality\\":144}","expiration":' + far_future + ',"creation":' + now_ms + '}'
             page.evaluate(f"window.localStorage.setItem('yt-player-quality', '{quality_val}');")
 
-            page.goto(target_url, timeout=60000, wait_until="domcontentloaded")
-            page.wait_for_timeout(2000)
+            page.goto(target_url, timeout=25000, wait_until="domcontentloaded")
+            page.wait_for_timeout(1500)
             dismiss_consent(page)
 
             try:
-                page.wait_for_selector("ytd-player, #movie_player, video", timeout=30000)
+                page.wait_for_selector("ytd-player, #movie_player, video", timeout=15000)
             except Exception:
-                log.warning(f"[#{instance_id}] 플레이어 못 찾음")
+                browser.close()
+                return
 
-            page.wait_for_timeout(2000)
+            page.wait_for_timeout(1000)
 
             try:
                 if page.evaluate('(() => { const p = document.querySelector("div#movie_player"); return p && p.classList.contains("paused-mode"); })()'):
@@ -158,7 +122,8 @@ def run_viewer(proxy_str, target_url, instance_id):
             with lock:
                 stats["alive"] += 1
                 stats["total_spawned"] += 1
-            log.info(f"[#{instance_id}] 시작됨 (proxy: {proxy_str}) | alive={stats['alive']} watching={stats['watching']}")
+            success = True
+            log.info(f"[#{instance_id}] ✓ alive (proxy: {proxy_str}) | alive={stats['alive']} watching={stats['watching']}")
 
             last_resume = 0
             watching = False
@@ -199,10 +164,12 @@ def run_viewer(proxy_str, target_url, instance_id):
                         stats["watching"] = max(0, stats["watching"] - 1)
 
     except Exception as e:
-        log.warning(f"[#{instance_id}] 실패: {str(e)[:80]}")
+        log.debug(f"[#{instance_id}] fail: {str(e)[:60]}")
     finally:
+        if success:
+            with lock:
+                stats["alive"] = max(0, stats["alive"] - 1)
         with lock:
-            stats["alive"] = max(0, stats["alive"] - 1)
             stats["failed"] += 1
 
 
@@ -216,10 +183,25 @@ def dismiss_consent(page):
             btn = page.query_selector(sel)
             if btn:
                 btn.click()
-                page.wait_for_timeout(1500)
+                page.wait_for_timeout(1000)
                 return
         except Exception:
             pass
+
+
+def spawner_wave(target_url, target_count, wave_size):
+    """wave_size개를 동시에 스폰 시도. 성공한 것만 살아남음."""
+    threads = []
+    for i in range(wave_size):
+        try:
+            proxy = proxy_queue.get(timeout=2)
+        except queue.Empty:
+            break
+        iid = stats["total_spawned"] + stats["failed"] + i + 1
+        t = threading.Thread(target=run_viewer, args=(proxy, target_url, iid), daemon=True)
+        t.start()
+        threads.append(t)
+    return threads
 
 
 def main():
@@ -231,51 +213,57 @@ def main():
     target_url = sys.argv[1]
     if "/@" in target_url and "/live" not in target_url:
         target_url = target_url.rstrip("/") + "/live"
-        log.info(f"채널 URL 감지 → 라이브 URL로 변환: {target_url}")
+        log.info(f"채널 URL → 라이브: {target_url}")
     target_count = int(sys.argv[2]) if len(sys.argv) > 2 else 100
 
-    log.info(f"=== CVAmp 파이프라인 봇 시작 ===")
+    log.info(f"=== CVAmp TURBO 모드 ===")
     log.info(f"URL: {target_url}")
-    log.info(f"목표: {target_count}명")
+    log.info(f"목표: {target_count}명 (7분 내)")
 
     proxies = load_proxies()
     if not proxies:
-        log.error("프록시가 없습니다. 먼저 proxy_updater.py를 실행하세요.")
+        log.error("프록시 없음. proxy_updater.py 먼저 실행.")
         sys.exit(1)
     log.info(f"프록시 {len(proxies)}개 준비됨")
 
-    stop_event = threading.Event()
+    # 프록시 공급 스레드
+    ft = threading.Thread(target=proxy_feeder, daemon=True)
+    ft.start()
 
-    # 검증 스레드 시작 (백그라운드에서 계속 검증)
-    vt = threading.Thread(target=validator_thread, args=(target_url, target_count, stop_event), daemon=True)
-    vt.start()
-    log.info("검증 스레드 시작됨 — 검증과 스폰이 동시 진행됩니다")
+    t0 = time.time()
 
-    # 스폰 루프: ready_queue에서 꺼내서 바로 스폰
-    next_id = 0
+    # 전략: 웨이브 방식으로 대량 동시 스폰
+    # 무료 프록시 성공률 ~5% → 100개 성공하려면 ~2000개 시도
+    # 동시 50개씩 웨이브, 각 웨이브 사이 3초 대기
+    # 50개 × 40웨이브 = 2000개 시도, 40 × 3초 = 120초 + 스폰시간 ~5분 = 총 ~7분
+
+    WAVE_SIZE = 50  # 동시 스폰 수 (RAM 16GB 기준)
+    WAVE_PAUSE = 3  # 웨이브 사이 대기 (초)
+
+    log.info(f"웨이브 모드: {WAVE_SIZE}개씩 동시 스폰, {WAVE_PAUSE}초 간격")
+
     try:
+        wave = 0
         while True:
-            # 목표 미달이면 빠르게 스폰, 달성이면 교체만
             need = target_count - stats["alive"]
+            elapsed = round(time.time() - t0)
+
             if need <= 0:
-                time.sleep(5)
-                log.info(f"[상태] alive={stats['alive']} watching={stats['watching']} failed={stats['failed']} total={stats['total_spawned']} | 목표 달성, 대기 중")
+                log.info(f"[{elapsed}s] ★ 목표 달성! alive={stats['alive']} watching={stats['watching']} failed={stats['failed']}")
+                time.sleep(10)
                 continue
 
-            try:
-                proxy = ready_queue.get(timeout=5)
-            except queue.Empty:
-                log.info(f"[상태] alive={stats['alive']} watching={stats['watching']} failed={stats['failed']} | 검증 대기 중... (need {need})")
-                continue
+            wave += 1
+            # 필요한 양의 3배 스폰 (성공률 감안, 최대 WAVE_SIZE)
+            spawn_count = min(WAVE_SIZE, need * 3)
+            log.info(f"[{elapsed}s] 웨이브 #{wave}: {spawn_count}개 스폰 | alive={stats['alive']} need={need} failed={stats['failed']}")
 
-            next_id += 1
-            t = threading.Thread(target=run_viewer, args=(proxy, target_url, next_id), daemon=True)
-            t.start()
+            spawner_wave(target_url, target_count, spawn_count)
+            time.sleep(WAVE_PAUSE)
 
-            if next_id % 5 == 0:
-                log.info(f"[스폰] #{next_id} | alive={stats['alive']} watching={stats['watching']} need={need}")
-
-            time.sleep(1.0)
+            # 7분 넘으면 경고
+            if elapsed > 420 and stats["alive"] < target_count:
+                log.warning(f"[{elapsed}s] 7분 초과! alive={stats['alive']}/{target_count}")
 
     except KeyboardInterrupt:
         log.info("사용자 중단 (Ctrl+C)")
