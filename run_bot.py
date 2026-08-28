@@ -237,9 +237,9 @@ def main():
     # 동시 50개씩 웨이브, 각 웨이브 사이 3초 대기
     # 50개 × 40웨이브 = 2000개 시도, 40 × 3초 = 120초 + 스폰시간 ~5분 = 총 ~7분
 
-    WAVE_SIZE = 150  # 동시 스폰 수 (RAM 64GB, i9-11900K)
-    WAVE_PAUSE = 2  # 웨이브 사이 대기 (초)
-    MAX_ALIVE = target_watching * 3  # watching 유지율 ~30-50%, 여유있게 3배
+    WAVE_SIZE = 30  # 동시 스폰 수 (안전하게)
+    WAVE_PAUSE = 10  # 웨이브 사이 대기 — 이전 웨이브 실패분 정리 시간
+    MAX_ALIVE = target_watching * 3
 
     log.info(f"웨이브 모드: {WAVE_SIZE}개씩 동시 스폰, alive 상한 {MAX_ALIVE}")
 
