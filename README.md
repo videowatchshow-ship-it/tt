@@ -16,7 +16,7 @@
 2. Provide your proxies or follow our comprehensive [Proxies Guide](https://github.com/KevinBytesTheDust/cvamp/wiki/Webshare.io-Proxies-Guide).  
    Get 10 free proxies for testing and 10% off your first proxy purchase at [Webshare.io](https://blueloperlabs.ch/proxy/wf).  
 
-Read the comprehensive [wiki](https://github.com/KevinBytesTheDust/cvamp/wiki) for [usage tips](https://github.com/KevinBytesTheDust/cvamp/wiki/Advanced-features-and-controls) and [troubleshooting steps](https://github.com/KevinBytesTheDust/cvamp/wiki/Troubleshooting).  
+Read the comprehensive [wiki](https://github.com/KevinBytesTheDust/cvamp/wiki) for [usage tips](https://github.com/KevinBytesTheDust/cvamp/wiki/Advanced-features-and-controls) and [troubleshooting steps](https://github.com/KevinBytesTheDust/cvamp/wiki/Troubleshooting).
 Ask questions in the [discussions](https://github.com/KevinBytesTheDust/cvamp/discussions) or [report issues](https://github.com/KevinBytesTheDust/cvamp/issues).
 
 ### Mandatory Requirements
@@ -59,7 +59,7 @@ Get 10 free proxies for testing and 10% off your first proxy purchase at [Websha
 
 The Crude Viewer Amplifier (CVAmp) is a small GUI tool that spawns muted Google Chrome instances via [Playwright](https://github.com/microsoft/playwright-python), each with a different HTTP proxy connection. Each instance navigates to the streaming channel and selects the lowest possible resolution.
 
-Read the comprehensive [wiki](https://github.com/KevinBytesTheDust/cvamp/wiki) for a [detailed tutorial](https://github.com/KevinBytesTheDust/cvamp/wiki/Detailed-Tutorial), [usage tips](https://github.com/KevinBytesTheDust/cvamp/wiki/Advanced-features-and-controls) and [troubleshooting steps](https://github.com/KevinBytesTheDust/cvamp/wiki/Troubleshooting).
+Read the comprehensive [wiki](https://github.com/KevinBytesTheDust/cvamp/wiki) for a [detailed tutorial](https://github.com/KevinBytesTheDust/cvamp/wiki/Detailed-Tutorial), [usage tips](https://github.com/KevinBytesTheDust/cvamp/wiki/Advanced-features-and-options) and [troubleshooting steps](https://github.com/KevinBytesTheDust/cvamp/wiki/Troubleshooting).
 
 ### Full disclaimer
 
